@@ -206,6 +206,7 @@ class ResponsesClient extends LLMClient {
       if (previousResponseId != null) {
         final valid = await checkResponseId(previousResponseId);
         if (!valid) {
+          // Truncating to a stale id 400s; send the full thread instead.
           _logger.warning(
             'previous_response_id $previousResponseId is invalid; '
             'clearing id and sending full history',
