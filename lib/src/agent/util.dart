@@ -104,6 +104,7 @@ bool isSubAgentMode(AgentState state) {
 
 /// True when this agent is a worker: constructor [StatefulAgent.isSubAgent]
 /// and/or session metadata `sub_agent_mode` (see [isSubAgentMode]).
+/// Named factories often set only the flag; doc-shaped clones set only metadata.
 bool isEffectivelySubAgent(StatefulAgent agent) {
   return agent.isSubAgent || isSubAgentMode(agent.state);
 }
