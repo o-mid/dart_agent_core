@@ -115,6 +115,7 @@ class OpenAIClient extends LLMClient {
           );
         }
       } on DioException catch (e) {
+        // Cancel is terminal; retrying it just waits out the backoff.
         if (isLlmRequestCancelled(e)) rethrow;
         if (retryCount < maxRetries) {
           await waitForRetry('DioException: ${e.message}');
