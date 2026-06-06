@@ -1155,6 +1155,7 @@ class StatefulAgent {
         }
         fullMessage = afterModel.response!;
         currentRetryCount = 0;
+        // maxTurns uses currentLoopCount; empty/hook retries already returned.
         state.currentLoopCount++;
 
         _logModelMessage(fullMessage, false);
