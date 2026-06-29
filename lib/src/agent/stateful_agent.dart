@@ -1910,6 +1910,8 @@ class StatefulAgent {
           metadata: metadata,
         );
       } catch (e) {
+        // Control-flow AgentExceptions must leave the tool runner, not become
+        // FunctionMessage error text.
         if (e is AgentException) {
           rethrow;
         }
