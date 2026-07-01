@@ -1238,6 +1238,7 @@ class StatefulAgent {
       );
     } on AgentException catch (e) {
       error = e;
+      // Match DioException: persist lastError and notify the controller.
       state.lastError = e.error?.toString() ?? e.message;
       if (e.code == AgentExceptionCode.cancelled) {
         _logger.warning(
