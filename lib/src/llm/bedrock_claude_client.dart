@@ -423,6 +423,7 @@ class BedrockClaudeClient extends LLMClient {
 
       if (toolChoice != null) {
         if (toolChoice.mode == ToolChoiceMode.none) {
+          // Same as the Anthropic client: type none is required to disable tools.
           body['tool_choice'] = {'type': 'none'};
         } else if (toolChoice.mode == ToolChoiceMode.auto) {
           body['tool_choice'] = {'type': 'auto'};

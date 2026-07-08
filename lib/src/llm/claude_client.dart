@@ -390,6 +390,7 @@ class ClaudeClient extends LLMClient {
 
       if (toolChoice != null) {
         if (toolChoice.mode == ToolChoiceMode.none) {
+          // Omitting tool_choice still lets Claude call tools; send type none.
           body['tool_choice'] = {'type': 'none'};
         } else if (toolChoice.mode == ToolChoiceMode.auto) {
           body['tool_choice'] = {'type': 'auto'};
