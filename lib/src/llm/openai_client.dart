@@ -302,6 +302,7 @@ Map<String, dynamic> _createRequestBody(
                 'input_audio': {'data': part.base64Data, 'format': format},
               };
             } else if (part is DocumentPart) {
+              // Chat Completions wants file_data as a data URI, not bare base64.
               final fileData = part.base64Data.startsWith('data:')
                   ? part.base64Data
                   : 'data:${part.mimeType};base64,${part.base64Data}';
