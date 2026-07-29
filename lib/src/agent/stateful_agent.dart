@@ -127,6 +127,7 @@ class _ModelMessageAccumulator {
   Map<String, dynamic>? metadata;
 
   bool get isEmptyResponse =>
+      // Thought-only and media-only stops are still a real model turn.
       _functionCalls.isEmpty &&
       _text.isEmpty &&
       _thought.isEmpty &&
