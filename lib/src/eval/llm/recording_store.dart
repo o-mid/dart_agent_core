@@ -121,6 +121,7 @@ class FileRecordingStore implements RecordingStore {
   }
 
   Future<void> _doFlush() async {
+    // Snapshot then clear so puts during the write land in the next flush.
     final batch = Map<String, ModelMessage>.from(_pendingWrites);
     if (batch.isEmpty) return;
     _pendingWrites.clear();
