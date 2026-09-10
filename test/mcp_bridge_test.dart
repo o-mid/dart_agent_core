@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_agent_core/dart_agent_core.dart';
@@ -113,6 +114,97 @@ void main() {
       isNot(contains('mcp_call_tool')),
     );
   });
+
+  test(
+    'unknown MCP server makes FunctionExecutionResult.isError true',
+    () async {
+      await connectEcho();
+      final state = AgentState.empty();
+      final client = _QueuedLLMClient([
+        _mcpListToolsCall(id: 'unknown-1', serverName: 'missing'),
+        ModelMessage(
+          model: 'fake-model',
+          textOutput: 'done',
+          stopReason: 'stop',
+        ),
+      ]);
+      final agent = StatefulAgent(
+        name: 'mcp',
+        client: client,
+        modelConfig: ModelConfig(model: 'fake-model'),
+        state: state,
+        mcpManager: manager,
+        withGeneralPrinciples: false,
+        disableSubAgents: true,
+      );
+
+      await agent.run([UserMessage.text('list missing')], useStream: false);
+
+      final result = state.history.messages
+          .whereType<FunctionExecutionResultMessage>()
+          .single
+          .results
+          .single;
+      expect(result.isError, isTrue);
+      expect((result.content.single as TextPart).text, startsWith('Error:'));
+    },
+  );
+
+  test(
+    'disconnected MCP server makes FunctionExecutionResult.isError true',
+    () async {
+      await connectEcho();
+      await manager.getSession('echo')!.disconnect();
+      expect(manager.hasServers, isTrue);
+      expect(manager.getSession('echo')!.isConnected, isFalse);
+
+      final state = AgentState.empty();
+      final client = _QueuedLLMClient([
+        _mcpListToolsCall(id: 'disc-1', serverName: 'echo'),
+        ModelMessage(
+          model: 'fake-model',
+          textOutput: 'done',
+          stopReason: 'stop',
+        ),
+      ]);
+      final agent = StatefulAgent(
+        name: 'mcp',
+        client: client,
+        modelConfig: ModelConfig(model: 'fake-model'),
+        state: state,
+        mcpManager: manager,
+        withGeneralPrinciples: false,
+        disableSubAgents: true,
+      );
+
+      await agent.run([UserMessage.text('list echo')], useStream: false);
+
+      final result = state.history.messages
+          .whereType<FunctionExecutionResultMessage>()
+          .single
+          .results
+          .single;
+      expect(result.isError, isTrue);
+      expect((result.content.single as TextPart).text, startsWith('Error:'));
+    },
+  );
+}
+
+ModelMessage _mcpListToolsCall({
+  required String id,
+  required String serverName,
+}) {
+  return ModelMessage(
+    model: 'fake-model',
+    stopReason: 'tool_calls',
+    functionCalls: [
+      FunctionCall(
+        id: id,
+        name: 'mcp_list_tools',
+        arguments: jsonEncode({'server_name': serverName}),
+      ),
+    ],
+  );
 }
 
 class _QueuedLLMClient extends LLMClient {

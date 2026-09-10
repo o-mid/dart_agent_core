@@ -179,6 +179,7 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpListTools,
+      resultIsError: _mcpResultIsError,
     );
   }
 
@@ -210,6 +211,7 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpCallTool,
+      resultIsError: _mcpResultIsError,
     );
   }
 
@@ -231,6 +233,7 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpListResources,
+      resultIsError: _mcpResultIsError,
     );
   }
 
@@ -256,6 +259,7 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpReadResource,
+      resultIsError: _mcpResultIsError,
     );
   }
 
@@ -276,6 +280,7 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpListPrompts,
+      resultIsError: _mcpResultIsError,
     );
   }
 
@@ -306,10 +311,14 @@ class McpManager {
       },
       parameterMode: ToolParameterMode.object,
       executable: _mcpGetPrompt,
+      resultIsError: _mcpResultIsError,
     );
   }
 
   // --- Bridge tool executables ---
+
+  static bool _mcpResultIsError(dynamic r) =>
+      r is String && r.startsWith('Error:');
 
   Future<String> _mcpListTools(Map<String, dynamic> args) async {
     final serverName = args['server_name'] as String;
