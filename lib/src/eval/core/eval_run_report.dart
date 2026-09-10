@@ -65,16 +65,31 @@ class EvalRunReport {
   ///   - regression: task passes only if every trial passes (pass^N where N=trialsPerRun)
   ///   - capability: task passes if at least one trial passes (pass@N)
   ///   - mixed: same as regression
+  ///
+  /// A trial "passes" for this metric according to [EvalSuite.taskPassThreshold]:
+  ///   - `1.0` (default): binary — [TrialResult.allGradersPassed]
+  ///   - `< 1.0`: partial credit — mean of non-null score values
+  ///     ([TrialResult.meanScoreValue]) must be >= the threshold
   double get taskPassRate {
     final byTask = trialsByTask();
     if (byTask.isEmpty) return 0.0;
     final passing = byTask.values.where((trs) {
       if (suite.kind == SuiteKind.capability) {
-        return trs.any((t) => t.allGradersPassed);
+        return trs.any(_trialPassesForTaskRate);
       }
-      return trs.every((t) => t.allGradersPassed);
+      return trs.every(_trialPassesForTaskRate);
     }).length;
     return passing / byTask.length;
+  }
+
+  /// Whether a single trial counts as passed for [taskPassRate].
+  bool _trialPassesForTaskRate(TrialResult t) {
+    final threshold = suite.taskPassThreshold;
+    // Default binary path preserves historical all-or-nothing semantics.
+    if (threshold >= 1.0) return t.allGradersPassed;
+    final mean = t.meanScoreValue;
+    if (mean == null) return false;
+    return mean >= threshold;
   }
 
   /// Mean of each grader's score across all trials (null-valued scores

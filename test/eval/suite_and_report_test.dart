@@ -258,6 +258,93 @@ void main() {
       },
     );
 
+    test('taskPassRate honors taskPassThreshold for partial-credit means', () {
+      EvalSuite suiteWithThreshold(double threshold) => EvalSuite(
+        name: 's',
+        agentName: 'agent_x',
+        kind: SuiteKind.mixed,
+        taskPassThreshold: threshold,
+        tasks: [
+          _StubTask(id: 'a', graders: [_NoopGrader()]),
+          _StubTask(id: 'b', graders: [_NoopGrader()]),
+        ],
+      );
+
+      // Partial means: task a mean 0.85 (>= 0.8) passes; task b mean 0.5 fails.
+      final partial = EvalRunReport(
+        runName: 'r',
+        suite: suiteWithThreshold(0.8),
+        trials: [
+          makeTrialResult(
+            runName: 'r',
+            suiteName: 's',
+            taskId: 'a',
+            trialIndex: 0,
+            scores: [
+              // Mean 0.85; graders themselves report failed on the 0.7.
+              Score(graderName: 'g1', value: 1.0, passed: true),
+              Score(
+                graderName: 'g2',
+                value: 0.7,
+                passed: false,
+                rationale: 'partial',
+              ),
+            ],
+          ),
+          makeTrialResult(
+            runName: 'r',
+            suiteName: 's',
+            taskId: 'b',
+            trialIndex: 0,
+            scores: [
+              Score(
+                graderName: 'g1',
+                value: 0.5,
+                passed: false,
+                rationale: 'low',
+              ),
+            ],
+          ),
+        ],
+        startedAt: DateTime(2025),
+        endedAt: DateTime(2025),
+      );
+      expect(partial.taskPassRate, 0.5);
+
+      // Threshold 1.0 stays all-or-nothing via allGradersPassed.
+      final binary = EvalRunReport(
+        runName: 'r',
+        suite: suiteWithThreshold(1.0),
+        trials: [
+          makeTrialResult(
+            runName: 'r',
+            suiteName: 's',
+            taskId: 'a',
+            trialIndex: 0,
+            scores: [
+              Score(graderName: 'g1', value: 1.0, passed: true),
+              Score(
+                graderName: 'g2',
+                value: 0.7,
+                passed: false,
+                rationale: 'partial',
+              ),
+            ],
+          ),
+          makeTrialResult(
+            runName: 'r',
+            suiteName: 's',
+            taskId: 'b',
+            trialIndex: 0,
+            scores: [okScore('noop')],
+          ),
+        ],
+        startedAt: DateTime(2025),
+        endedAt: DateTime(2025),
+      );
+      expect(binary.taskPassRate, 0.5);
+    });
+
     test('graderMeans excludes null scores from averages', () {
       final report = EvalRunReport(
         runName: 'r',
