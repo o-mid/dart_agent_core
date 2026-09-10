@@ -27,6 +27,12 @@ class ResponsesClient extends LLMClient {
   /// prefer to always send full history or manage previous_response_id yourself.
   final bool autoPreviousResponseId;
 
+  /// When true (default), the client calls [checkResponseId] before truncating
+  /// history with [previous_response_id]. If the id is invalid, it is cleared and
+  /// the full message history is sent instead. Set to false to skip the GET check
+  /// (e.g. offline / rate-limited environments).
+  final bool validatePreviousResponseId;
+
   /// Keys from [ModelConfig.extra] allowed to be forwarded to the API request body.
   /// When null (default), uses: { 'reasoning', 'caching', 'expire_at', 'thinking', 'store' }.
   /// Pass a custom set at construction to allow additional or different keys.
@@ -42,6 +48,7 @@ class ResponsesClient extends LLMClient {
     this.initialRetryDelayMs = 1000,
     this.maxRetryDelayMs = 10000,
     this.autoPreviousResponseId = true,
+    this.validatePreviousResponseId = true,
     this.extraAllowedKeys,
     Dio? client,
   }) : _apiKey = apiKey,
@@ -60,15 +67,13 @@ class ResponsesClient extends LLMClient {
     CancelToken? cancelToken,
   }) async {
     final url = '$baseUrl/responses';
-    final body = _createRequestBody(
+    final body = await _buildRequestBody(
       messages,
       tools: tools,
       toolChoice: toolChoice,
       modelConfig: modelConfig,
       stream: false,
       jsonOutput: jsonOutput,
-      autoPreviousResponseId: autoPreviousResponseId,
-      extraAllowedKeys: extraAllowedKeys,
     );
 
     int retryCount = 0;
@@ -175,6 +180,54 @@ class ResponsesClient extends LLMClient {
     }
   }
 
+  /// Resolve [previous_response_id], optionally validate it, then build the body.
+  Future<Map<String, dynamic>> _buildRequestBody(
+    List<LLMMessage> messages, {
+    List<Tool>? tools,
+    ToolChoice? toolChoice,
+    required ModelConfig modelConfig,
+    required bool stream,
+    bool? jsonOutput,
+  }) async {
+    var ignorePreviousResponseId = false;
+
+    if (validatePreviousResponseId) {
+      String? previousResponseId =
+          modelConfig.extra?['previous_response_id'] as String?;
+      if (previousResponseId == null && autoPreviousResponseId) {
+        for (int i = messages.length - 1; i >= 0; i--) {
+          final m = messages[i];
+          if (m is ModelMessage && m.responseId != null) {
+            previousResponseId = m.responseId;
+            break;
+          }
+        }
+      }
+      if (previousResponseId != null) {
+        final valid = await checkResponseId(previousResponseId);
+        if (!valid) {
+          _logger.warning(
+            'previous_response_id $previousResponseId is invalid; '
+            'clearing id and sending full history',
+          );
+          ignorePreviousResponseId = true;
+        }
+      }
+    }
+
+    return _createRequestBody(
+      messages,
+      tools: tools,
+      toolChoice: toolChoice,
+      modelConfig: modelConfig,
+      stream: stream,
+      jsonOutput: jsonOutput,
+      autoPreviousResponseId: autoPreviousResponseId,
+      extraAllowedKeys: extraAllowedKeys,
+      ignorePreviousResponseId: ignorePreviousResponseId,
+    );
+  }
+
   @override
   Future<Stream<StreamingMessage>> stream(
     List<LLMMessage> messages, {
@@ -185,15 +238,13 @@ class ResponsesClient extends LLMClient {
     CancelToken? cancelToken,
   }) async {
     final url = '$baseUrl/responses';
-    final body = _createRequestBody(
+    final body = await _buildRequestBody(
       messages,
       tools: tools,
       toolChoice: toolChoice,
       modelConfig: modelConfig,
       stream: true,
       jsonOutput: jsonOutput,
-      autoPreviousResponseId: autoPreviousResponseId,
-      extraAllowedKeys: extraAllowedKeys,
     );
 
     StreamController<StreamingMessage> controller =
@@ -329,6 +380,7 @@ Map<String, dynamic> _createRequestBody(
   bool? jsonOutput,
   bool autoPreviousResponseId = true,
   Set<String>? extraAllowedKeys,
+  bool ignorePreviousResponseId = false,
 }) {
   const defaultExtraAllowedKeys = {
     'reasoning',
@@ -339,27 +391,30 @@ Map<String, dynamic> _createRequestBody(
   };
   final allowedKeys = extraAllowedKeys ?? defaultExtraAllowedKeys;
   // 1. Determine previous_response_id: explicit extra, or (if autoPreviousResponseId) from last ModelMessage
-  String? previousResponseId =
-      modelConfig.extra?['previous_response_id'] as String?;
+  String? previousResponseId;
   int cutoffIndex = -1;
 
-  if (previousResponseId == null && autoPreviousResponseId) {
-    for (int i = messages.length - 1; i >= 0; i--) {
-      final m = messages[i];
-      if (m is ModelMessage && m.responseId != null) {
-        previousResponseId = m.responseId;
-        cutoffIndex = i;
-        break;
+  if (!ignorePreviousResponseId) {
+    previousResponseId = modelConfig.extra?['previous_response_id'] as String?;
+
+    if (previousResponseId == null && autoPreviousResponseId) {
+      for (int i = messages.length - 1; i >= 0; i--) {
+        final m = messages[i];
+        if (m is ModelMessage && m.responseId != null) {
+          previousResponseId = m.responseId;
+          cutoffIndex = i;
+          break;
+        }
       }
-    }
-  } else if (previousResponseId != null) {
-    // Explicit previous_response_id: still need cutoff so we only send messages after that point
-    // Only when effectiveAuto did not set cutoff, we send all messages (cutoffIndex stays -1)
-    for (int i = messages.length - 1; i >= 0; i--) {
-      final m = messages[i];
-      if (m is ModelMessage && m.responseId == previousResponseId) {
-        cutoffIndex = i;
-        break;
+    } else if (previousResponseId != null) {
+      // Explicit previous_response_id: still need cutoff so we only send messages after that point
+      // Only when effectiveAuto did not set cutoff, we send all messages (cutoffIndex stays -1)
+      for (int i = messages.length - 1; i >= 0; i--) {
+        final m = messages[i];
+        if (m is ModelMessage && m.responseId == previousResponseId) {
+          cutoffIndex = i;
+          break;
+        }
       }
     }
   }
