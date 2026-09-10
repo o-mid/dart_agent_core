@@ -1910,6 +1910,9 @@ class StatefulAgent {
           metadata: metadata,
         );
       } catch (e) {
+        if (e is AgentException) {
+          rethrow;
+        }
         _logger.severe(
           '[$name] ❌ Error executing ${call.name} with args ${call.arguments}: $e',
         );

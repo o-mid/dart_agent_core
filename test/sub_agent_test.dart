@@ -175,6 +175,173 @@ void main() {
     expect(joined, contains('prior-0'));
     expect(joined, contains('Summarize.'));
   });
+
+  test(
+    'cancel during worker run propagates AgentException.cancelled to parent',
+    () async {
+      final cancelToken = CancelToken();
+      final client = _CancelOnWorkerGenerateClient([
+        _toolCallReply('delegate_task', {
+          'assignee': 'QA_Expert',
+          'task_description': 'Review.',
+        }),
+      ], cancelToken);
+      final agent = StatefulAgent(
+        name: 'manager',
+        client: client,
+        modelConfig: ModelConfig(model: 'fake-model'),
+        state: AgentState.empty(),
+        withGeneralPrinciples: false,
+        subAgents: [
+          SubAgent(
+            name: 'QA_Expert',
+            description: 'Reviews work',
+            agentFactory: (parent) => StatefulAgent(
+              name: 'qa',
+              client: parent.client,
+              modelConfig: parent.modelConfig,
+              state: AgentState(
+                sessionId: 'worker-cancel',
+                metadata: {'sub_agent_mode': true},
+              ),
+              withGeneralPrinciples: false,
+              disableSubAgents: true,
+              isSubAgent: true,
+            ),
+          ),
+        ],
+      );
+
+      await expectLater(
+        agent.run(
+          [UserMessage.text('delegate')],
+          useStream: false,
+          cancelToken: cancelToken,
+        ),
+        throwsA(
+          isA<AgentException>().having(
+            (e) => e.code,
+            'code',
+            AgentExceptionCode.cancelled,
+          ),
+        ),
+      );
+      expect(client.generateCalls, 2);
+      expect(
+        agent.state.history.messages
+            .whereType<FunctionExecutionResultMessage>(),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'ordinary worker failure remains a soft tool error for the parent',
+    () async {
+      final client = _FailingWorkerThenParentClient([
+        _toolCallReply('delegate_task', {
+          'assignee': 'QA_Expert',
+          'task_description': 'Review.',
+        }),
+        _textReply('parent recovered'),
+      ]);
+      final agent = StatefulAgent(
+        name: 'manager',
+        client: client,
+        modelConfig: ModelConfig(model: 'fake-model'),
+        state: AgentState.empty(),
+        withGeneralPrinciples: false,
+        subAgents: [
+          SubAgent(
+            name: 'QA_Expert',
+            description: 'Reviews work',
+            agentFactory: (parent) => StatefulAgent(
+              name: 'qa',
+              client: parent.client,
+              modelConfig: parent.modelConfig,
+              state: AgentState(
+                sessionId: 'worker-fail',
+                metadata: {'sub_agent_mode': true},
+              ),
+              withGeneralPrinciples: false,
+              disableSubAgents: true,
+              isSubAgent: true,
+            ),
+          ),
+        ],
+      );
+
+      await agent.run([UserMessage.text('delegate')], useStream: false);
+
+      final text =
+          (agent.state.history.messages
+                      .whereType<FunctionExecutionResultMessage>()
+                      .single
+                      .results
+                      .single
+                      .content
+                      .single
+                  as TextPart)
+              .text;
+      expect(text, contains('execution failed'));
+      expect(text, contains('boom'));
+      expect(client.generateCalls, 3);
+    },
+  );
+
+  test('worker loopDetection AgentException propagates to parent', () async {
+    final client = _ThrowOnWorkerGenerateClient(
+      parentThenRecover: [
+        _toolCallReply('delegate_task', {
+          'assignee': 'QA_Expert',
+          'task_description': 'Review.',
+        }),
+        _textReply('should not reach if exception propagates'),
+      ],
+      workerError: AgentException(
+        AgentExceptionCode.loopDetection,
+        'worker looped',
+      ),
+    );
+    final agent = StatefulAgent(
+      name: 'manager',
+      client: client,
+      modelConfig: ModelConfig(model: 'fake-model'),
+      state: AgentState.empty(),
+      withGeneralPrinciples: false,
+      subAgents: [
+        SubAgent(
+          name: 'QA_Expert',
+          description: 'Reviews work',
+          agentFactory: (parent) => StatefulAgent(
+            name: 'qa',
+            client: parent.client,
+            modelConfig: parent.modelConfig,
+            state: AgentState(
+              sessionId: 'worker-loop',
+              metadata: {'sub_agent_mode': true},
+            ),
+            withGeneralPrinciples: false,
+            disableSubAgents: true,
+            isSubAgent: true,
+          ),
+        ),
+      ],
+    );
+
+    await expectLater(
+      agent.run([UserMessage.text('delegate')], useStream: false),
+      throwsA(
+        isA<AgentException>().having(
+          (e) => e.code,
+          'code',
+          AgentExceptionCode.loopDetection,
+        ),
+      ),
+    );
+    expect(client.workerThrows, 1);
+    expect(client.parentRecoverCalls, 0);
+  });
 }
 
 class _QueuedLLMClient extends LLMClient {
@@ -240,4 +407,125 @@ ModelMessage _toolCallReply(String name, Map<String, dynamic> arguments) {
       FunctionCall(id: 'call-1', name: name, arguments: jsonEncode(arguments)),
     ],
   );
+}
+
+/// Parent generate returns [replies.first]; worker generate cancels the token
+/// and throws the cancel DioException so the worker surfaces cancelled.
+class _CancelOnWorkerGenerateClient extends _QueuedLLMClient {
+  final CancelToken tokenToCancel;
+
+  _CancelOnWorkerGenerateClient(super.replies, this.tokenToCancel);
+
+  @override
+  Future<ModelMessage> generate(
+    List<LLMMessage> messages, {
+    List<Tool>? tools,
+    ToolChoice? toolChoice,
+    required ModelConfig modelConfig,
+    bool? jsonOutput,
+    CancelToken? cancelToken,
+  }) async {
+    capturedMessages.add(List<LLMMessage>.from(messages));
+    if (generateCalls == 0) {
+      return replies[generateCalls++];
+    }
+    generateCalls++;
+    tokenToCancel.cancel('user cancelled');
+    throw tokenToCancel.cancelError!;
+  }
+}
+
+/// Parent tool-call reply, then worker throws, then parent recovery text.
+///
+/// [replies] is `[parentToolCall, parentRecoveryText]`. The worker call sits
+/// between them and always throws `Exception('boom')`.
+class _FailingWorkerThenParentClient extends _QueuedLLMClient {
+  _FailingWorkerThenParentClient(super.replies);
+
+  @override
+  Future<ModelMessage> generate(
+    List<LLMMessage> messages, {
+    List<Tool>? tools,
+    ToolChoice? toolChoice,
+    required ModelConfig modelConfig,
+    bool? jsonOutput,
+    CancelToken? cancelToken,
+  }) async {
+    capturedMessages.add(List<LLMMessage>.from(messages));
+    final callIndex = generateCalls++;
+    if (callIndex == 1) {
+      throw Exception('boom');
+    }
+    final replyIndex = callIndex == 0 ? 0 : callIndex - 1;
+    if (replyIndex >= replies.length) {
+      throw StateError('Unexpected extra generate() call');
+    }
+    return replies[replyIndex];
+  }
+}
+
+/// First parent call returns [parentThenRecover.first]; worker throws
+/// [workerError]; if the parent keeps running it consumes further recovery
+/// replies (used to prove soft-swallow vs propagate).
+class _ThrowOnWorkerGenerateClient extends LLMClient {
+  final List<ModelMessage> parentThenRecover;
+  final Object workerError;
+  final capturedMessages = <List<LLMMessage>>[];
+  int generateCalls = 0;
+  int workerThrows = 0;
+  int parentRecoverCalls = 0;
+
+  _ThrowOnWorkerGenerateClient({
+    required this.parentThenRecover,
+    required this.workerError,
+  });
+
+  @override
+  Future<ModelMessage> generate(
+    List<LLMMessage> messages, {
+    List<Tool>? tools,
+    ToolChoice? toolChoice,
+    required ModelConfig modelConfig,
+    bool? jsonOutput,
+    CancelToken? cancelToken,
+  }) async {
+    capturedMessages.add(List<LLMMessage>.from(messages));
+    final callIndex = generateCalls++;
+    if (callIndex == 0) {
+      return parentThenRecover[0];
+    }
+    if (callIndex == 1) {
+      workerThrows++;
+      throw workerError;
+    }
+    parentRecoverCalls++;
+    final recoverIndex = callIndex - 1;
+    if (recoverIndex >= parentThenRecover.length) {
+      throw StateError('Unexpected extra generate() call');
+    }
+    return parentThenRecover[recoverIndex];
+  }
+
+  @override
+  Future<Stream<StreamingMessage>> stream(
+    List<LLMMessage> messages, {
+    List<Tool>? tools,
+    ToolChoice? toolChoice,
+    required ModelConfig modelConfig,
+    bool? jsonOutput,
+    CancelToken? cancelToken,
+  }) async {
+    return Stream.value(
+      StreamingMessage(
+        modelMessage: await generate(
+          messages,
+          tools: tools,
+          toolChoice: toolChoice,
+          modelConfig: modelConfig,
+          jsonOutput: jsonOutput,
+          cancelToken: cancelToken,
+        ),
+      ),
+    );
+  }
 }

@@ -160,6 +160,26 @@ You are currently running as a delegated **Sub-Agent** (Worker).
         "status": "success",
       },
     );
+  } on AgentException catch (e) {
+    // Propagate control-flow exceptions so the parent run stops the same way
+    // the worker did (cancel, loop detection, hook abort).
+    if (e.code == AgentExceptionCode.cancelled ||
+        e.code == AgentExceptionCode.loopDetection ||
+        e.code == AgentExceptionCode.stopByController) {
+      rethrow;
+    }
+    _subAgentLogger.warning(
+      "[${workerAgent.name}] Sub-agent ($assignee) execution failed: $e",
+    );
+    return AgentToolResult(
+      content: TextPart("Sub-agent $assignee execution failed: $e"),
+      metadata: {
+        "sub_agent_session_id": workerAgent.state.sessionId,
+        "task_description": taskDescription,
+        "assignee": assignee,
+        "status": "error",
+      },
+    );
   } catch (e) {
     _subAgentLogger.warning(
       "[${workerAgent.name}] Sub-agent ($assignee) execution failed: $e",
