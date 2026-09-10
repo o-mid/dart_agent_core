@@ -542,7 +542,7 @@ class StatefulAgent {
     }
 
     //2. Sub Agents
-    if (!isSubAgentMode(state)) {
+    if (!isEffectivelySubAgent(this)) {
       if (!disableSubAgents) {
         final subAgentInstruction = buildSubAgentSystemPrompt(state, subAgents);
         if (subAgentInstruction != null) {
@@ -680,7 +680,7 @@ class StatefulAgent {
     }
 
     // 3. Inject sub agent tools
-    if (!isSubAgentMode(state)) {
+    if (!isEffectivelySubAgent(this)) {
       if (!disableSubAgents) {
         toolsCopy.addAll(subAgentTools);
       }
