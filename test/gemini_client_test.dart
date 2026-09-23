@@ -44,6 +44,51 @@ void main() {
       });
     });
 
+    test('parallel function calls without ids get distinct ids', () async {
+      final adapter = _CaptureAdapter([
+        (_) => _jsonResponse({
+          'candidates': [
+            {
+              'content': {
+                'parts': [
+                  {
+                    'functionCall': {
+                      'name': 'search',
+                      'args': {'q': 'a'},
+                    },
+                  },
+                  {
+                    'functionCall': {
+                      'name': 'search',
+                      'args': {'q': 'b'},
+                    },
+                  },
+                ],
+              },
+              'finishReason': 'STOP',
+            },
+          ],
+        }),
+      ]);
+      final client = GeminiClient(
+        apiKey: 'test-key',
+        client: Dio()..httpClientAdapter = adapter,
+      );
+
+      final result = await client.generate([
+        UserMessage.text('search twice'),
+      ], modelConfig: ModelConfig(model: 'gemini-test'));
+
+      expect(result.functionCalls.map((call) => call.id).toList(), [
+        'search',
+        'search#2',
+      ]);
+      expect(result.functionCalls.map((call) => jsonDecode(call.arguments)), [
+        {'q': 'a'},
+        {'q': 'b'},
+      ]);
+    });
+
     test('request body maps functionCall and functionResponse ids', () async {
       final adapter = _CaptureAdapter([
         (_) => _jsonResponse({

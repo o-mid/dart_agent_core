@@ -523,6 +523,24 @@ Map<String, dynamic> _createRequestBody(
   return body;
 }
 
+/// Gemini omits `functionCall.id` on some responses. Falling back to the
+/// tool name collides when the model calls that tool twice in one turn, and
+/// the agent loop indexes results by id. Keep the first id (the name, when
+/// none was sent) and suffix later duplicates.
+String _geminiFunctionCallId({
+  required String? rawId,
+  required String name,
+  required Set<String> used,
+}) {
+  final base = (rawId == null || rawId.isEmpty) ? name : rawId;
+  if (used.add(base)) return base;
+  var n = 2;
+  while (!used.add('$base#$n')) {
+    n++;
+  }
+  return '$base#$n';
+}
+
 ModelMessage? _parseResponse(
   Map<String, dynamic> data,
   ModelConfig modelConfig,
@@ -539,6 +557,7 @@ ModelMessage? _parseResponse(
 
     String? textOutput;
     List<FunctionCall> functionCalls = [];
+    final usedFunctionCallIds = <String>{};
     String? thoughtSignature;
     String? thought;
 
@@ -555,7 +574,11 @@ ModelMessage? _parseResponse(
         final id = fc['id']?.toString();
         functionCalls.add(
           FunctionCall(
-            id: id == null || id.isEmpty ? name : id,
+            id: _geminiFunctionCallId(
+              rawId: id,
+              name: name,
+              used: usedFunctionCallIds,
+            ),
             name: name,
             arguments: jsonEncode(fc['args'] ?? {}),
           ),

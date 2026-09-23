@@ -113,6 +113,64 @@ void main() {
     expect(agent.state.isRunning, isFalse);
   });
 
+  test('duplicate function call ids both run and stay paired', () async {
+    final seenArgs = <String>[];
+    final client = _QueuedLLMClient([
+      ModelMessage(
+        model: 'fake-model',
+        stopReason: 'tool_calls',
+        functionCalls: [
+          FunctionCall(id: 'search', name: 'search', arguments: '{"q":"a"}'),
+          FunctionCall(id: 'search', name: 'search', arguments: '{"q":"b"}'),
+        ],
+      ),
+      _textReply('done'),
+    ]);
+    final agent = _agent(
+      client: client,
+      tools: [
+        Tool(
+          name: 'search',
+          description: 'search',
+          parameters: const {'type': 'object', 'properties': {}},
+          parameterMode: ToolParameterMode.object,
+          executable: (Map<String, dynamic> args) {
+            final q = args['q'] as String;
+            seenArgs.add(q);
+            return q;
+          },
+        ),
+      ],
+    );
+
+    await agent.run([UserMessage.text('search twice')], useStream: false);
+
+    expect(seenArgs, ['a', 'b']);
+    final modelCall = agent.state.history.messages
+        .whereType<ModelMessage>()
+        .first;
+    final results = agent.state.history.messages
+        .whereType<FunctionExecutionResultMessage>()
+        .single
+        .results;
+    expect(modelCall.functionCalls.map((call) => call.id).toList(), [
+      'search',
+      'search#2',
+    ]);
+    expect(results.map((result) => result.id).toList(), ['search', 'search#2']);
+    expect(results.map((result) => (result.content.single as TextPart).text), [
+      'a',
+      'b',
+    ]);
+
+    final followUp = client.seenMessages[1];
+    final echoed = followUp.whereType<FunctionExecutionResultMessage>().single;
+    expect(echoed.results.map((result) => result.id).toList(), [
+      'search',
+      'search#2',
+    ]);
+  });
+
   test('unknown tools and thrown executables become isError results', () async {
     var boomRan = false;
     final client = _QueuedLLMClient([
@@ -576,6 +634,7 @@ StatefulAgent _agent({
 
 class _QueuedLLMClient extends LLMClient {
   final List<ModelMessage> replies;
+  final List<List<LLMMessage>> seenMessages = [];
   int generateCalls = 0;
 
   _QueuedLLMClient(this.replies);
@@ -592,6 +651,7 @@ class _QueuedLLMClient extends LLMClient {
     if (generateCalls >= replies.length) {
       throw StateError('Unexpected extra generate() call');
     }
+    seenMessages.add(messages);
     return replies[generateCalls++];
   }
 
